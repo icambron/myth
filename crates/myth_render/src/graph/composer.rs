@@ -601,8 +601,6 @@ impl<'a> FrameComposer<'a> {
 
             // ── 2c. Wire Compute + Shadow Passes ───────────────────────────
             graph_ctx.with_group("Compute", |c| {
-                self.ctx.mipmap_pass.add_to_graph(c);
-
                 if self.ctx.resource_manager.needs_brdf_compute() {
                     self.ctx.brdf_pass.add_to_graph(c);
                 }
