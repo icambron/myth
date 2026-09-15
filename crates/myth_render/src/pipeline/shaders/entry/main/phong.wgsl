@@ -141,6 +141,18 @@ fn fs_main(
     {$ if HAS_MAP $}
         let tex_color = textureSample(t_map, s_map, varyings.map_uv);
         diffuse_color *= tex_color;
+        // A per-object overlay recolours the surface while keeping the
+        // photograph's relief, and unlike the multiply above it can lighten.
+        // overlay.a carries the material's mean albedo luminance: both the
+        // divisor that maps that mean onto the overlay colour and the flag
+        // that says there is an overlay at all (0 = none, the common case).
+        if (u_material.overlay.a > 0.0) {
+            let overlay_luma = dot(tex_color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+            diffuse_color = vec4<f32>(
+                u_material.overlay.rgb * (overlay_luma / u_material.overlay.a),
+                diffuse_color.a,
+            );
+        }
     {$ endif $}
 
     // Apply opacity

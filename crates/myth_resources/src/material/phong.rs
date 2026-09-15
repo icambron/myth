@@ -37,6 +37,15 @@ pub struct PhongMaterial {
     #[uniform]
     pub alpha_test: f32,
 
+    /// A per-object colour laid over the diffuse map, recolouring it while
+    /// keeping its relief and -- unlike `color`, which can only multiply --
+    /// able to lighten. `rgb` is the overlay in linear space; `a` is the
+    /// material's mean albedo luminance, which both scales the overlay to the
+    /// map and, when zero, switches the whole thing off. Zero by default, so a
+    /// material without one draws exactly as before.
+    #[uniform(default = "Vec4::ZERO")]
+    pub overlay: Vec4,
+
     /// The color map.
     #[texture]
     pub map: TextureSlot,
