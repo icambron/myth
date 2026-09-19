@@ -55,6 +55,15 @@ pub struct PhysicalMaterial {
     #[uniform(default = "1.0")]
     pub roughness: f32,
 
+    /// How strongly the roughness map varies the uniform roughness.
+    #[uniform(default = "1.0")]
+    pub roughness_map_strength: f32,
+
+    /// Height-map relief strength. This perturbs shading normals without
+    /// displacing the mesh or changing its silhouette.
+    #[uniform]
+    pub height_scale: f32,
+
     /// Metalness factor.
     #[uniform]
     pub metalness: f32,
@@ -86,6 +95,12 @@ pub struct PhysicalMaterial {
     /// Specular intensity.
     #[uniform(default = "1.0")]
     pub specular_intensity: f32,
+
+    /// Recolors an albedo map toward a target while preserving luminance.
+    /// RGB is the target color and alpha is the source image's mean
+    /// luminance; zero alpha disables recoloring.
+    #[uniform(default = "Vec4::ZERO")]
+    pub overlay: Vec4,
 
     /// Clearcoat factor.
     #[uniform(skip_builder)]
@@ -178,6 +193,10 @@ pub struct PhysicalMaterial {
     /// The AO map.
     #[texture]
     pub ao_map: TextureSlot,
+
+    /// A grayscale field used to perturb the shading normal.
+    #[texture]
+    pub height_map: TextureSlot,
 
     /// The specular map.
     #[texture]
