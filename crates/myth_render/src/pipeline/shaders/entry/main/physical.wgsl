@@ -28,6 +28,30 @@ $$ endif
 {$ include 'core/alpha_test' $}
 {$ include 'modules/bsdf/pbr_tone_mapping' $}
 
+// The stock tangent-frame helper is emitted only for normal-map, clearcoat,
+// and anisotropy variants. Height can be present by itself, so it needs an
+// independently guarded helper.
+$$ if HAS_HEIGHT_MAP is defined
+fn getHeightTangentFrame(
+    eye_pos: vec3<f32>,
+    surf_norm: vec3<f32>,
+    uv: vec2<f32>,
+) -> mat3x3<f32> {
+    let q0 = dpdx(eye_pos);
+    let q1 = dpdy(eye_pos);
+    let st0 = dpdx(uv);
+    let st1 = dpdy(uv);
+    let q1perp = cross(q1, surf_norm);
+    let q0perp = cross(surf_norm, q0);
+    let tangent = q1perp * st0.x + q0perp * st1.x;
+    let bitangent = q1perp * st0.y + q0perp * st1.y;
+    let determinant = max(dot(tangent, tangent), dot(bitangent, bitangent));
+    let scale = select(inverseSqrt(determinant), 0.0, determinant == 0.0);
+
+    return mat3x3f(tangent * scale, -bitangent * scale, surf_norm);
+}
+$$ endif
+
 // ── Screen / Transient BindGroup (Group 3) ──────────────────────────
 //
 // Bindings 0-7 are always present. Clustered variants append bindings 8-10
@@ -166,6 +190,13 @@ fn fs_main(
     $$ if HAS_MAP
         let tex_color = textureSample(t_map, s_map, varyings.map_uv);
         diffuse_color *= tex_color;
+        if (u_material.overlay.a > 0.0) {
+            let overlay_luma = dot(tex_color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+            diffuse_color = vec4<f32>(
+                u_material.overlay.rgb * (overlay_luma / u_material.overlay.a),
+                diffuse_color.a,
+            );
+        }
     $$ endif
 
     // Apply opacity
@@ -178,12 +209,14 @@ fn fs_main(
 
     let view = normalize(u_render_state.camera_position - varyings.world_position);
 
-    $$ if HAS_NORMAL_MAP is defined or USE_ANISOTROPY is defined
+    $$ if HAS_NORMAL_MAP is defined or HAS_HEIGHT_MAP is defined or USE_ANISOTROPY is defined
         $$ if HAS_TANGENT is defined
             var tbn = mat3x3f(normalize(varyings.v_tangent), normalize(varyings.v_bitangent), surface_normal);
         $$ else
             $$ if HAS_NORMAL_MAP is defined
                 let n_uv = varyings.normal_map_uv; 
+            $$ elif HAS_HEIGHT_MAP is defined
+                let n_uv = varyings.height_map_uv;
             $$ elif HAS_CLEARCOAT_NORMAL_MAP is defined
                 let n_uv = varyings.clearcoat_normal_map_uv;
             $$ elif HAS_MAP_UV is defined
@@ -191,7 +224,11 @@ fn fs_main(
             $$ else
                 let n_uv = varyings.uv;
             $$ endif
-            var tbn = getTangentFrame(view, surface_normal, n_uv );
+            $$ if HAS_NORMAL_MAP is defined or HAS_CLEARCOAT_NORMAL_MAP is defined or USE_ANISOTROPY is defined
+                var tbn = getTangentFrame(view, surface_normal, n_uv);
+            $$ else
+                var tbn = getHeightTangentFrame(view, surface_normal, n_uv);
+            $$ endif
         $$ endif
 
         tbn[0] = tbn[0] * face_direction;
@@ -201,9 +238,36 @@ fn fs_main(
     $$ if HAS_NORMAL_MAP is defined
         let normal_map = textureSample( t_normal_map, s_normal_map, varyings.normal_map_uv ) * 2.0 - 1.0;
         let map_n = vec3f(normal_map.xy * u_material.normal_scale, normal_map.z);
-        let normal = normalize(tbn * map_n);
+        var normal = normalize(tbn * map_n);
     $$ else
-        let normal = surface_normal;
+        var normal = surface_normal;
+    $$ endif
+
+    // Height maps contribute a tangent-space slope. This changes the light's
+    // reading of shallow relief without moving the mesh silhouette.
+    $$ if HAS_HEIGHT_MAP is defined
+        let height_dimensions = vec2<f32>(textureDimensions(t_height_map));
+        let height_texel = 1.0 / height_dimensions;
+        let height_here = textureSample(
+            t_height_map,
+            s_height_map,
+            varyings.height_map_uv,
+        ).r;
+        let height_u = textureSample(
+            t_height_map,
+            s_height_map,
+            varyings.height_map_uv + vec2<f32>(height_texel.x, 0.0),
+        ).r;
+        let height_v = textureSample(
+            t_height_map,
+            s_height_map,
+            varyings.height_map_uv + vec2<f32>(0.0, height_texel.y),
+        ).r;
+        let height_slope = vec2<f32>(
+            height_here - height_u,
+            height_here - height_v,
+        ) * height_dimensions * u_material.height_scale;
+        normal = normalize(normal + tbn * vec3<f32>(height_slope, 0.0));
     $$ endif
 
     $$ if USE_CLEARCOAT is defined
@@ -244,6 +308,26 @@ fn fs_main(
     $$ endif
 
     {$ include 'mixins/physical_material_setup' $}
+
+    // Uniform roughness establishes the base response. The strength controls
+    // how much authored per-texel variation is mixed into it.
+    $$ if HAS_ROUGHNESS_MAP is defined
+        let authored_roughness = textureSample(
+            t_roughness_map,
+            s_roughness_map,
+            varyings.roughness_map_uv,
+        ).g;
+        roughness_factor = u_material.roughness * mix(
+            1.0,
+            authored_roughness,
+            u_material.roughness_map_strength,
+        );
+        material.roughness = clamp(
+            max(roughness_factor, 0.0525) + geometry_roughness,
+            0.0,
+            1.0,
+        );
+    $$ endif
 
     // ── Debug View: material attribute short-circuit ──────────────────
     $$ if DEBUG_VIEW_ALBEDO is defined
