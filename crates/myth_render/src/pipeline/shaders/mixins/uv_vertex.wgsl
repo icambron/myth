@@ -22,6 +22,10 @@ $$ if HAS_NORMAL_MAP is defined
     out.normal_map_uv = (u_material.normal_map_transform * vec3<f32>(in.uv{{NORMAL_MAP_UV or ''}}, 1.0)).xy;
 $$ endif
 
+$$ if HAS_HEIGHT_MAP is defined
+    out.height_map_uv = (u_material.height_map_transform * vec3<f32>(in.uv{{HEIGHT_MAP_UV or ''}}, 1.0)).xy;
+$$ endif
+
 $$ if HAS_SPECULAR_MAP is defined
     out.specular_map_uv = (u_material.specular_map_transform * vec3<f32>(in.uv{{SPECULAR_MAP_UV or ''}}, 1.0)).xy;
 $$ endif

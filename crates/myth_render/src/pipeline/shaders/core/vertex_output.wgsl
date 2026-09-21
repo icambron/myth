@@ -27,6 +27,10 @@ struct VertexOutput {
         @location({{ loc.next() }}) normal_map_uv: vec2<f32>,
     $$ endif
 
+    $$ if HAS_HEIGHT_MAP is defined
+        @location({{ loc.next() }}) height_map_uv: vec2<f32>,
+    $$ endif
+
     $$ if HAS_SPECULAR_MAP is defined
         @location({{ loc.next() }}) specular_map_uv: vec2<f32>,
     $$ endif

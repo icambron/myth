@@ -200,3 +200,24 @@ impl ShaderGenerator {
         format!("// === Auto-generated Unified Shader ===\n{source}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ShaderCompilationOptions, ShaderGenerator};
+
+    #[test]
+    fn height_map_variants_carry_transformed_uvs_between_stages() {
+        let mut options = ShaderCompilationOptions::new();
+        options.add_define("HAS_HEIGHT_MAP", "1");
+        options.add_define("HEIGHT_MAP_UV", "");
+        let output = ShaderGenerator::generate_custom_shader(
+            "height-map-uv-test",
+            "{$ include 'core/vertex_output' $}\n{$ include 'mixins/uv_vertex' $}",
+            &options,
+        );
+
+        assert!(output.contains("height_map_uv: vec2<f32>"));
+        assert!(output.contains("out.height_map_uv ="));
+        assert!(output.contains("u_material.height_map_transform"));
+    }
+}
