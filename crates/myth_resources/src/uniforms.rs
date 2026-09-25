@@ -366,6 +366,8 @@ pub struct GpuLightStorage {
     pub range: f32,
 
     pub direction: Vec3,
+    /// Positive: inverse distance exponent. Negative: radius falloff exponent.
+    #[default(2.0)]
     pub decay: f32,
 
     pub inner_cone_cos: f32,

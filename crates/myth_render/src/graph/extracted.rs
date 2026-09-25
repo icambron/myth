@@ -67,6 +67,7 @@ pub struct ExtractedLight {
     pub id: u64,
     pub color: Vec3,
     pub intensity: f32,
+    pub falloff: myth_scene::light::LightFalloff,
     pub flags: u32,
     pub cast_shadows: bool,
     pub kind: LightKind,
@@ -367,6 +368,7 @@ impl ExtractedScene {
                 id: light.id(),
                 color: light.color,
                 intensity: light.intensity,
+                falloff: light.falloff,
                 flags: light.flags,
                 cast_shadows: light.cast_shadows,
                 kind: light.kind.clone(),
@@ -673,6 +675,10 @@ fn extracted_light_to_gpu(light: &ExtractedLight) -> GpuLightStorage {
         intensity: light.intensity,
         position: light.position,
         direction: light.direction,
+        decay: match light.falloff {
+            myth_scene::light::LightFalloff::InverseSquare => 2.0,
+            myth_scene::light::LightFalloff::Radius { exponent } => -exponent,
+        },
         flags: light.flags,
         shadow_layer_index: -1,
         ..Default::default()
@@ -770,14 +776,25 @@ fn spot_bounding_sphere(position: Vec3, direction: Vec3, spot: &SpotLight) -> (V
 
 #[cfg(test)]
 mod tests {
-    use super::{sort_and_truncate_lights, spot_bounding_sphere};
+    use super::{extracted_light_to_gpu, sort_and_truncate_lights, spot_bounding_sphere};
     use glam::Vec3;
     use myth_scene::light::{DirectionalLight, LightKind, PointLight, SpotLight};
 
     use crate::graph::extracted::ExtractedLight;
 
+    #[test]
+    fn local_light_falloff_survives_gpu_extraction() {
+        let mut light = point_light(1, Vec3::ZERO, 20.0, 100.0);
+        assert_eq!(extracted_light_to_gpu(&light).decay, 2.0);
+        light.falloff = myth_scene::light::LightFalloff::Radius { exponent: 8.0 };
+        assert_eq!(extracted_light_to_gpu(&light).decay, -8.0);
+        let spot = spot_light(2, Vec3::ZERO, 20.0, 100.0);
+        assert_eq!(extracted_light_to_gpu(&spot).decay, 2.0);
+    }
+
     fn directional_light(id: u64) -> ExtractedLight {
         ExtractedLight {
+            falloff: myth_scene::light::LightFalloff::InverseSquare,
             id,
             color: Vec3::ONE,
             intensity: 1.0,
@@ -792,6 +809,7 @@ mod tests {
 
     fn point_light(id: u64, position: Vec3, intensity: f32, range: f32) -> ExtractedLight {
         ExtractedLight {
+            falloff: myth_scene::light::LightFalloff::InverseSquare,
             id,
             color: Vec3::ONE,
             intensity,
@@ -806,6 +824,7 @@ mod tests {
 
     fn spot_light(id: u64, position: Vec3, intensity: f32, range: f32) -> ExtractedLight {
         ExtractedLight {
+            falloff: myth_scene::light::LightFalloff::InverseSquare,
             id,
             color: Vec3::ONE,
             intensity,

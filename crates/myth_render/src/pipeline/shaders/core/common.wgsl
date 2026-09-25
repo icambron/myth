@@ -18,6 +18,10 @@ const EPSILON = 1e-6;
 
 
 fn getDistanceAttenuation(light_distance: f32, cutoff_distance: f32, decay_exponent: f32) -> f32 {
+    if (decay_exponent < 0.0) {
+        let relative_distance = light_distance / max(cutoff_distance, 0.0001);
+        return pow(saturate(1.0 - relative_distance * relative_distance), -decay_exponent);
+    }
     var distance_falloff: f32 = 1.0 / max( pow( light_distance, decay_exponent ), 0.01 );
     if ( cutoff_distance > 0.0 ) {
         distance_falloff *= pow2( saturate( 1.0 - pow4( light_distance / cutoff_distance ) ) );

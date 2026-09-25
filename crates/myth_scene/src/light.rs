@@ -77,6 +77,17 @@ pub enum LightKind {
     Spot(SpotLight),
 }
 
+/// Distance response for local lights. Radius falloff is non-photometric:
+/// intensity is the response at the source, fading to zero at the range.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum LightFalloff {
+    #[default]
+    InverseSquare,
+    Radius {
+        exponent: f32,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct Light {
     uuid: Uuid,
@@ -84,6 +95,7 @@ pub struct Light {
     /// Bit flags used by renderer-side specialization paths.
     pub flags: u32,
     pub color: Vec3,
+    pub falloff: LightFalloff,
     pub intensity: f32, // Suggestion: specify units, e.g. in PBR: Point uses Candela, Directional uses Lux
     pub kind: LightKind,
 
@@ -121,6 +133,7 @@ impl Light {
             flags: 0,
             color,
             intensity,
+            falloff: LightFalloff::InverseSquare,
             kind: LightKind::Directional(DirectionalLight {
                 // cascades: 4,
             }),
@@ -138,6 +151,7 @@ impl Light {
             flags: 0,
             color,
             intensity,
+            falloff: LightFalloff::InverseSquare,
             kind: LightKind::Point(PointLight { range }),
             cast_shadows: false,
             shadow: Some(ShadowConfig::default()),
@@ -159,6 +173,7 @@ impl Light {
             flags: 0,
             color,
             intensity,
+            falloff: LightFalloff::InverseSquare,
             kind: LightKind::Spot(SpotLight {
                 range,
                 inner_cone,
