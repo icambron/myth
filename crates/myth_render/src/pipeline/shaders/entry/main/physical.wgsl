@@ -237,7 +237,10 @@ fn fs_main(
 
     $$ if HAS_NORMAL_MAP is defined
         let normal_map = textureSample( t_normal_map, s_normal_map, varyings.normal_map_uv ) * 2.0 - 1.0;
-        let map_n = vec3f(normal_map.xy * u_material.normal_scale, normal_map.z);
+        let normal_z = select(normal_map.z,
+            sqrt(max(0.0, 1.0 - dot(normal_map.xy, normal_map.xy))),
+            u_material.normal_reconstruct_z > 0.5);
+        let map_n = vec3f(normal_map.xy * u_material.normal_scale, normal_z);
         var normal = normalize(tbn * map_n);
     $$ else
         var normal = surface_normal;

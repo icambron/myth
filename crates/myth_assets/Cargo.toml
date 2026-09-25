@@ -41,6 +41,7 @@ ehttp = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 zip = { workspace = true, optional = true }
 zstd = { workspace = true, optional = true }
+ktx2 = "0.4"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["fs", "rt-multi-thread", "time", "macros"] }

@@ -46,6 +46,12 @@ pub enum PixelFormat {
     Rgba16Float,
     /// Single-channel 8-bit unsigned normalised.
     R8Unorm,
+    /// BC block-compressed color or data, with 4x4 texels per block.
+    Bc1,
+    Bc3,
+    Bc5,
+    Bc6h,
+    Bc7,
 }
 
 impl PixelFormat {
@@ -61,6 +67,14 @@ impl PixelFormat {
             (Self::Rgba8Unorm, ColorSpace::Linear) => wgpu::TextureFormat::Rgba8Unorm,
             (Self::Rgba16Float, _) => wgpu::TextureFormat::Rgba16Float,
             (Self::R8Unorm, _) => wgpu::TextureFormat::R8Unorm,
+            (Self::Bc1, ColorSpace::Srgb) => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
+            (Self::Bc1, _) => wgpu::TextureFormat::Bc1RgbaUnorm,
+            (Self::Bc3, ColorSpace::Srgb) => wgpu::TextureFormat::Bc3RgbaUnormSrgb,
+            (Self::Bc3, _) => wgpu::TextureFormat::Bc3RgbaUnorm,
+            (Self::Bc5, _) => wgpu::TextureFormat::Bc5RgUnorm,
+            (Self::Bc6h, _) => wgpu::TextureFormat::Bc6hRgbUfloat,
+            (Self::Bc7, ColorSpace::Srgb) => wgpu::TextureFormat::Bc7RgbaUnormSrgb,
+            (Self::Bc7, _) => wgpu::TextureFormat::Bc7RgbaUnorm,
         }
     }
 
@@ -70,9 +84,28 @@ impl PixelFormat {
     pub const fn block_copy_size(self) -> u32 {
         match self {
             Self::Rgba8Unorm => 4,
-            Self::Rgba16Float => 8,
+            Self::Rgba16Float | Self::Bc1 => 8,
             Self::R8Unorm => 1,
+            Self::Bc3 | Self::Bc5 | Self::Bc6h | Self::Bc7 => 16,
         }
+    }
+
+    /// Dimensions of one storage block in texels.
+    #[must_use]
+    pub const fn block_dimensions(self) -> (u32, u32) {
+        match self {
+            Self::Bc1 | Self::Bc3 | Self::Bc5 | Self::Bc6h | Self::Bc7 => (4, 4),
+            _ => (1, 1),
+        }
+    }
+
+    /// Size of a two-dimensional mip level, including partial edge blocks.
+    #[must_use]
+    pub fn mip_byte_size(self, width: u32, height: u32) -> Option<usize> {
+        let (bw, bh) = self.block_dimensions();
+        (width.div_ceil(bw) as usize)
+            .checked_mul(height.div_ceil(bh) as usize)?
+            .checked_mul(self.block_copy_size() as usize)
     }
 }
 
@@ -208,7 +241,7 @@ pub struct Image {
     pub width: u32,
     pub height: u32,
     pub depth: u32,
-    pub mip_level_count: u32,
+    mip_level_count: u32,
     pub dimension: ImageDimension,
     pub format: PixelFormat,
     /// Raw pixel bytes.
@@ -239,6 +272,42 @@ impl Image {
                 None => ImageStorage::Empty,
             },
         }
+    }
+
+    /// Creates a static 2D image with tightly packed mip levels, largest first.
+    /// Rejects zero dimensions, impossible mip counts, and mismatched payloads.
+    pub fn from_mip_levels(
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+        levels: &[&[u8]],
+    ) -> Result<Self, &'static str> {
+        if width == 0
+            || height == 0
+            || levels.is_empty()
+            || levels.len() > (width.max(height).ilog2() + 1) as usize
+        {
+            return Err("invalid mip dimensions or count");
+        }
+        let mut data = Vec::new();
+        for (level, bytes) in levels.iter().enumerate() {
+            let expected = format
+                .mip_byte_size((width >> level).max(1), (height >> level).max(1))
+                .ok_or("mip size overflow")?;
+            if bytes.len() != expected {
+                return Err("mip payload size does not match dimensions");
+            }
+            data.extend_from_slice(bytes);
+        }
+        let mut image = Self::new(width, height, 1, ImageDimension::D2, format, Some(data));
+        image.mip_level_count = levels.len() as u32;
+        Ok(image)
+    }
+
+    /// Number of levels carried in the pixel payload.
+    #[must_use]
+    pub const fn mip_level_count(&self) -> u32 {
+        self.mip_level_count
     }
 
     /// Creates a dynamic image whose CPU buffer can be updated in place.
@@ -374,5 +443,33 @@ impl Image {
             PixelFormat::Rgba8Unorm,
             Some(data),
         )
+    }
+}
+
+#[cfg(test)]
+mod mip_tests {
+    use super::{Image, PixelFormat};
+
+    #[test]
+    fn partial_edge_blocks_and_tail_mips_retain_complete_blocks() {
+        assert_eq!(PixelFormat::Bc1.mip_byte_size(7, 5), Some(32));
+        assert_eq!(PixelFormat::Bc5.mip_byte_size(1, 1), Some(16));
+        let image = Image::from_mip_levels(
+            8,
+            4,
+            PixelFormat::Bc1,
+            &[&[1; 16], &[2; 8], &[3; 8], &[4; 8]],
+        )
+        .unwrap();
+        assert_eq!(image.mip_level_count(), 4);
+        assert_eq!(image.data().unwrap().len(), 40);
+    }
+
+    #[test]
+    fn malformed_chains_fail_before_upload() {
+        assert!(Image::from_mip_levels(0, 4, PixelFormat::Bc1, &[&[0; 8]]).is_err());
+        assert!(Image::from_mip_levels(4, 4, PixelFormat::Bc1, &[]).is_err());
+        assert!(Image::from_mip_levels(4, 4, PixelFormat::Bc1, &[&[0; 7]]).is_err());
+        assert!(Image::from_mip_levels(1, 1, PixelFormat::Bc1, &[&[0; 8], &[0; 8]]).is_err());
     }
 }

@@ -29,6 +29,10 @@ pub struct PhongMaterial {
     #[uniform(default = "Vec2::ONE")]
     pub normal_scale: Vec2,
 
+    /// Reconstruct positive Z from an XY normal texture when set to one.
+    #[uniform]
+    pub normal_reconstruct_z: f32,
+
     /// Shininess factor.
     #[uniform(default = "30.0")]
     pub shininess: f32,

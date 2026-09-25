@@ -1473,11 +1473,14 @@ impl AssetServer {
 
     /// CPU image decoding logic.
     ///
-    /// Always produces `PixelFormat::Rgba8Unorm`; colour-space interpretation
-    /// is deferred to the [`Texture`] that references this image.
+    /// Native KTX2 retains its format and mip levels. Other images decode to
+    /// RGBA8; color-space interpretation belongs to the referencing texture.
     fn decode_image_cpu(bytes: &[u8], label: &str) -> Result<Image> {
         use image::GenericImageView;
 
+        if bytes.starts_with(b"\xABKTX 20\xBB\r\n\x1A\n") {
+            return crate::ktx::decode(bytes);
+        }
         let img = image::load_from_memory(bytes).map_err(|e| {
             Error::Asset(AssetError::Format(format!(
                 "Failed to decode image {label}: {e}"
