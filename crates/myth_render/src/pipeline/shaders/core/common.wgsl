@@ -17,17 +17,7 @@ const RECIPROCAL_PI: f32 = 0.3183098861837907;
 const EPSILON = 1e-6;
 
 
-fn getDistanceAttenuation(light_distance: f32, cutoff_distance: f32, decay_exponent: f32) -> f32 {
-    if (decay_exponent < 0.0) {
-        let relative_distance = light_distance / max(cutoff_distance, 0.0001);
-        return pow(saturate(1.0 - relative_distance * relative_distance), -decay_exponent);
-    }
-    var distance_falloff: f32 = 1.0 / max( pow( light_distance, decay_exponent ), 0.01 );
-    if ( cutoff_distance > 0.0 ) {
-        distance_falloff *= pow2( saturate( 1.0 - pow4( light_distance / cutoff_distance ) ) );
-    }
-    return distance_falloff;
-}
+{$ include 'core/light_attenuation' $}
 
 fn getSpotAttenuation( cone_cosine: f32, penumbra_cosine: f32, angle_cosine: f32 ) -> f32 {
     return smoothstep( cone_cosine, penumbra_cosine, angle_cosine );

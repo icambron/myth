@@ -14,42 +14,12 @@ const LIGHT_VIEW_TRANSFORM_WG_SIZE: u32 = 64u;
 const LIGHT_INTENSITY_CULL_THRESHOLD: f32 = 0.005;
 const SPOT_TIGHT_SPHERE_COS_THRESHOLD: f32 = 0.70710678;
 
-fn pow2(x: f32) -> f32 {
-    return x * x;
-}
+{$ include 'core/light_attenuation' $}
 
-fn pow4(x: f32) -> f32 {
-    let x2 = x * x;
-    return x2 * x2;
-}
-
-fn light_distance_attenuation(light_distance: f32, cutoff_distance: f32, decay_exponent: f32) -> f32 {
-    var distance_falloff = 1.0 / max(pow(light_distance, decay_exponent), 0.01);
-    if (cutoff_distance > 0.0) {
-        distance_falloff *= pow2(saturate(1.0 - pow4(light_distance / cutoff_distance)));
-    }
-    return distance_falloff;
-}
-
-// Uses the analytical inverse of the unwindowed distance attenuation curve.
-// Ignoring the edge-smoothing window yields a conservative radius, which is
-// exactly what clustered culling wants.
 fn solve_effective_light_distance(light: Struct_lights) -> f32 {
-    if (light.range <= 0.0 || light.intensity <= 0.0) {
-        return -1.0;
-    }
-
-    let closest_contribution = light.intensity
-        * light_distance_attenuation(0.0, light.range, light.decay);
-    if (closest_contribution <= LIGHT_INTENSITY_CULL_THRESHOLD) {
-        return -1.0;
-    }
-
-    let safe_distance = pow(
-        light.intensity / LIGHT_INTENSITY_CULL_THRESHOLD,
-        1.0 / max(light.decay, 0.01),
+    return getLightCullingDistance(
+        light.intensity, light.range, light.decay, LIGHT_INTENSITY_CULL_THRESHOLD,
     );
-    return min(safe_distance, light.range);
 }
 
 fn build_spot_bounding_sphere(light: Struct_lights, effective_range: f32) -> vec4<f32> {
