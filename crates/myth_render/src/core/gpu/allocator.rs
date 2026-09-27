@@ -19,7 +19,7 @@ use super::buffer::GpuBufferHandle;
 /// Each frame the sequence is:
 /// 1. [`reset()`]  — clear the staging vector
 /// 2. [`allocate()`] — push uniforms and return byte offsets
-/// 3. Caller uploads via `ResourceManager::upload_model_buffer()`
+/// 3. Caller uploads via `ResourceManager::flush_model_buffers()` before building bind groups
 pub struct ModelBufferAllocator {
     /// CPU-side staging data for the current frame.
     host_data: Vec<DynamicModelUniforms>,

@@ -44,7 +44,6 @@ use myth_assets::AssetServer;
 use myth_resources::AntiAliasingMode;
 use myth_resources::RenderableMaterialTrait;
 use myth_resources::material::{AlphaMode, Side};
-use myth_resources::uniforms::{DynamicModelUniforms, Mat3Uniform};
 use myth_scene::camera::RenderCamera;
 use myth_scene::light::ShadowFaces;
 
@@ -69,8 +68,9 @@ struct Struct_shadow_light {
 ///    command lists.
 /// 2. **Shadow commands** — per-shadow-view frustum cull + shadow pipeline
 ///    lookup → per-view `ShadowRenderCommand` queues.
-/// 3. **Dynamic uniform upload** — compute inverse/normal matrices, allocate
-///    model-uniform slots, flush the model buffer to GPU.
+///
+/// Model uniforms and object bindings are prepared during extraction; every view
+/// references the same per-mesh slot without resizing the buffer during culling.
 #[allow(clippy::too_many_arguments)]
 pub fn cull_and_sort(
     extracted_scene: &ExtractedScene,
@@ -104,9 +104,6 @@ pub fn cull_and_sort(
         render_lists,
         assets,
     );
-
-    // resource_manager.upload_model_buffer();
-    resource_manager.flush_model_buffers();
 }
 
 // ============================================================================
@@ -420,24 +417,13 @@ fn prepare_main_camera_commands(
             let distance_sq = camera_pos.distance_squared(item_pos);
             let sort_key = RenderKey::new(pipeline_id, mat_id, distance_sq, is_transparent);
 
-            let world_matrix_inverse = item.world_matrix.inverse();
-            let normal_matrix = Mat3Uniform::from_mat4(world_matrix_inverse.transpose());
-
-            let dynamic_offset = resource_manager.allocate_model_uniform(DynamicModelUniforms {
-                world_matrix: item.world_matrix,
-                world_matrix_inverse,
-                normal_matrix,
-                previous_world_matrix: item.prev_world_matrix,
-                ..Default::default()
-            });
-
             let cmd = RenderCommand {
                 object_bind_group: object_bind_group.clone(),
                 geometry_handle: item.geometry,
                 material_handle: item.material,
                 pipeline_id,
                 sort_key,
-                dynamic_offset,
+                dynamic_offset: item.dynamic_offset,
             };
 
             if is_transparent {
@@ -664,21 +650,12 @@ fn prepare_shadow_commands(
                 id
             };
 
-            let world_matrix_inverse = item.world_matrix.inverse();
-            let normal_matrix = Mat3Uniform::from_mat4(world_matrix_inverse.transpose());
-            let dynamic_offset = resource_manager.allocate_model_uniform(DynamicModelUniforms {
-                world_matrix: item.world_matrix,
-                world_matrix_inverse,
-                normal_matrix,
-                ..Default::default()
-            });
-
             queue.push(ShadowRenderCommand {
                 object_bind_group: item.object_bind_group.clone(),
                 geometry_handle: item.geometry,
                 material_handle: item.material,
                 pipeline_id,
-                dynamic_offset,
+                dynamic_offset: item.dynamic_offset,
             });
         }
     }
