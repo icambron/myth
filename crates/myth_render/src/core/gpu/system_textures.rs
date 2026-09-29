@@ -302,6 +302,17 @@ fn create_screen_bind_group_layout(
         count: None,
     });
 
+    entries.push(wgpu::BindGroupLayoutEntry {
+        binding: 15,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Depth,
+            view_dimension: wgpu::TextureViewDimension::D2Array,
+            multisampled: false,
+        },
+        count: None,
+    });
+
     if clustered {
         entries.push(wgpu::BindGroupLayoutEntry {
             binding: 8,

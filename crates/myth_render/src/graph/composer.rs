@@ -671,6 +671,7 @@ impl<'a> FrameComposer<'a> {
                 crate::graph::passes::shadow::ShadowOutput {
                     shadow_2d: None,
                     shadow_cube: None,
+                    shadow_spot: None,
                 }
             };
 
@@ -811,6 +812,7 @@ impl<'a> FrameComposer<'a> {
                             ssao_output,
                             shadow_output.shadow_2d,
                             shadow_output.shadow_cube,
+                            shadow_output.shadow_spot,
                             // env_dependency_base,
                             env_dependency_pmrem,
                             scene_lighting,
@@ -980,6 +982,7 @@ impl<'a> FrameComposer<'a> {
                             ssao_output,
                             shadow_output.shadow_2d,
                             shadow_output.shadow_cube,
+                            shadow_output.shadow_spot,
                             scene_lighting,
                         );
 
@@ -1174,6 +1177,7 @@ impl<'a> FrameComposer<'a> {
                         prepared_skybox,
                         shadow_output.shadow_2d,
                         shadow_output.shadow_cube,
+                        shadow_output.shadow_spot,
                         env_dependency_pmrem,
                         scene_lighting,
                     )

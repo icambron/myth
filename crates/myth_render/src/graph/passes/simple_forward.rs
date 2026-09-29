@@ -54,6 +54,7 @@ impl SimpleForwardFeature {
         prepared_skybox: Option<PreparedSkyboxDraw<'a>>,
         shadow_tex: Option<TextureNodeId>,
         shadow_cube_tex: Option<TextureNodeId>,
+        shadow_spot_tex: Option<TextureNodeId>,
         // env_map_tex: Option<TextureNodeId>,
         pmrem_tex: Option<TextureNodeId>,
         scene_lighting: ClusteredScreenBindings,
@@ -80,6 +81,9 @@ impl SimpleForwardFeature {
 
             if let Some(shadow) = shadow_tex {
                 builder.read_texture(shadow);
+            }
+            if let Some(shadow_spot) = shadow_spot_tex {
+                builder.read_texture(shadow_spot);
             }
             if let Some(shadow_cube) = shadow_cube_tex {
                 builder.read_texture(shadow_cube);
@@ -139,6 +143,7 @@ impl SimpleForwardFeature {
                 prepared_skybox,
                 shadow_input: shadow_tex,
                 shadow_cube_input: shadow_cube_tex,
+                shadow_spot_input: shadow_spot_tex,
                 scene_lighting,
                 screen_bind_group: None,
             };
@@ -164,6 +169,7 @@ pub struct SimpleForwardPassNode<'a> {
     pub prepared_skybox: Option<PreparedSkyboxDraw<'a>>,
     pub shadow_input: Option<TextureNodeId>,
     pub shadow_cube_input: Option<TextureNodeId>,
+    pub shadow_spot_input: Option<TextureNodeId>,
     pub scene_lighting: ClusteredScreenBindings,
     screen_bind_group: Option<&'a wgpu::BindGroup>,
 }
@@ -176,6 +182,7 @@ impl<'a> PassNode<'a> for SimpleForwardPassNode<'a> {
             None,
             self.shadow_input,
             self.shadow_cube_input,
+            self.shadow_spot_input,
             self.scene_lighting,
         );
         self.screen_bind_group = Some(bg);

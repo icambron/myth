@@ -305,6 +305,11 @@ pub struct RendererSettings {
     /// passes for the current frame or falls back to the classic forward
     /// light loop for small-light-count scenes.
     pub clustered_shading: ClusteredShadingMode,
+
+    /// Maximum local-light shadow views per frame. A spot costs one view,
+    /// a point light costs six. Directional cascades have their own budget.
+    /// Lights outside this budget still illuminate, without shadow maps.
+    pub max_local_shadow_views: u32,
 }
 
 impl Default for RendererSettings {
@@ -314,6 +319,7 @@ impl Default for RendererSettings {
             vsync: true,
             anisotropy_clamp: 1,
             clustered_shading: ClusteredShadingMode::default(),
+            max_local_shadow_views: 32,
         }
     }
 }

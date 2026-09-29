@@ -403,6 +403,7 @@ impl Renderer {
 
         let feature_config = RenderFrameFeatureConfig {
             clustered_shading: self.settings.clustered_shading,
+            max_local_shadow_views: self.settings.max_local_shadow_views,
             render_path: state.wgpu_ctx.render_path,
             msaa_samples: state.wgpu_ctx.msaa_samples,
         };
@@ -1339,6 +1340,80 @@ mod tests {
             )
             .expect("frame composer must exist")
             .render();
+    }
+
+    #[test]
+    fn local_shadows_have_independent_resolution_and_a_bounded_view_count() {
+        use myth_scene::Light;
+        let mut renderer = init_headless_renderer();
+        renderer.settings.max_local_shadow_views = 2;
+        let assets = AssetServer::new();
+        let mut scene = Scene::new();
+        let mut sun = Light::new_directional(Vec3::ONE, 1.0);
+        sun.cast_shadows = true;
+        sun.shadow.as_mut().unwrap().map_size = 1024;
+        sun.shadow.as_mut().unwrap().cascade_count = 2;
+        scene.add_light(sun);
+        let mut spots = Vec::new();
+        for _ in 0..4 {
+            let mut spot = Light::new_spot(Vec3::ONE, 1.0, 10.0, 0.1, 0.5);
+            spot.cast_shadows = true;
+            spot.shadow.as_mut().unwrap().map_size = 128;
+            spots.push(scene.add_light(spot));
+        }
+        scene.update_matrix_world();
+        render_frame(&mut renderer, &mut scene, make_camera(), &assets, 0);
+        let state = renderer.context.as_ref().unwrap();
+        let dimensions = |name| {
+            state
+                .graph_storage
+                .resources
+                .iter()
+                .find(|r| r.name == name)
+                .expect("shadow texture must exist")
+                .texture_desc()
+                .size
+        };
+        assert_eq!(
+            dimensions("Shadow_Directional_Array"),
+            wgpu::Extent3d {
+                width: 1024,
+                height: 1024,
+                depth_or_array_layers: 2
+            }
+        );
+        assert_eq!(
+            dimensions("Shadow_Spot_Array"),
+            wgpu::Extent3d {
+                width: 128,
+                height: 128,
+                depth_or_array_layers: 2
+            }
+        );
+        let lights = state
+            .render_frame
+            .extracted_scene
+            .local_light_storage_buffer
+            .read();
+        let layers: Vec<_> = lights.iter().map(|l| l.shadow_layer_index).collect();
+        assert_eq!(layers, [0, 1, -1, -1]);
+        drop(lights);
+        assert_eq!(state.render_lists.active_views.len(), 5); // camera, two cascades, two spots
+
+        for spot in spots {
+            scene.get_light_mut(spot).unwrap().intensity = 0.0;
+        }
+        render_frame(&mut renderer, &mut scene, make_camera(), &assets, 1);
+        let state = renderer.context.as_ref().unwrap();
+        assert_eq!(state.render_frame.extracted_scene.local_light_count(), 0);
+        assert!(
+            !state
+                .graph_storage
+                .resources
+                .iter()
+                .any(|r| r.name == "Shadow_Spot_Array")
+        );
+        assert_eq!(state.render_lists.active_views.len(), 3);
     }
 
     #[test]

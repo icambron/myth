@@ -59,6 +59,7 @@ $$ endif
 @group(3) @binding(1) var s_screen_sampler: sampler;
 @group(3) @binding(2) var t_ssao: texture_2d<f32>;
 @group(3) @binding(3) var t_shadow_map_2d_array: texture_depth_2d_array;
+@group(3) @binding(15) var t_shadow_map_spot_array: texture_depth_2d_array;
 @group(3) @binding(4) var t_shadow_map_cube_array: texture_depth_cube_array;
 @group(3) @binding(5) var s_shadow_map_compare: sampler_comparison;
 @group(3) @binding(6) var<uniform> u_local_light_buffer_metadata: LightBufferMetadata;

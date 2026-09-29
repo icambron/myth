@@ -1,18 +1,19 @@
 //! RDG Shadow Render Pass
 //!
-//! Renders shadow depth maps for all shadow-casting lights. Two transient
+//! Renders shadow depth maps for all shadow-casting lights. Three transient
 //! textures are managed per frame:
 //!
-//! - **`Texture2DArray`** — directional light cascades and spot light shadows.
+//! - **`Texture2DArray`** — directional light cascades.
+//! - **`Texture2DArray`** — spot light shadows, at an independent resolution.
 //! - **`TextureCubeArray`** — point light omnidirectional shadows (6 faces per
 //!   light, hardware-seamless PCF across edges).
 //!
 //! VP matrices are uploaded to a per-layer dynamic uniform buffer shared by
-//! both texture types.
+//! all shadow textures.
 //!
 //! # RDG Integration
 //!
-//! Both shadow map textures are **transient RDG resources** — their lifetimes
+//! All shadow map textures are **transient RDG resources** — their lifetimes
 //! are fully managed by the render graph compiler. Consumer passes (Opaque,
 //! Transparent, etc.) declare explicit `read_texture` dependencies to
 //! establish DAG ordering and enable automatic memory aliasing.
@@ -50,11 +51,14 @@ use crate::graph::passes::draw::submit_draw_commands;
 /// Output returned by [`ShadowFeature::add_to_graph`].
 ///
 /// Consumer passes wire `read_texture` dependencies against these IDs.
+#[derive(Clone, Copy, Default)]
 pub struct ShadowOutput {
-    /// 2D array shadow map (directional/spot). `None` when unused.
+    /// 2D array shadow map (directional). `None` when unused.
     pub shadow_2d: Option<TextureNodeId>,
     /// Cube array shadow map (point lights). `None` when unused.
     pub shadow_cube: Option<TextureNodeId>,
+    /// Independent-resolution 2D array for spot lights.
+    pub shadow_spot: Option<TextureNodeId>,
 }
 
 /// Shadow rendering feature.
@@ -80,16 +84,18 @@ pub struct ShadowFeature {
 
     /// All shadow light instances this frame (both 2D and cube).
     shadow_lights: Vec<ShadowLightInstance>,
-    /// Pre-built (uniform_index, instance) pairs for 2D shadows.
+    /// Pre-built (uniform_index, instance) pairs for directional shadows.
     d2_lights: Vec<(u32, ShadowLightInstance)>,
     /// Pre-built (uniform_index, instance) pairs for cube shadows.
     cube_lights: Vec<(u32, ShadowLightInstance)>,
-    /// Total 2D array layers (directional cascades + spot lights).
-    total_2d_layers: u32,
     /// Total cube array layers (point lights, always a multiple of 6).
     total_cube_layers: u32,
-    /// Maximum shadow map resolution across 2D views.
+    /// Maximum shadow map resolution across directional views.
     shadow_2d_resolution: u32,
+    /// Pre-built (uniform_index, instance) pairs for spot shadows.
+    spot_lights: Vec<(u32, ShadowLightInstance)>,
+    /// Maximum shadow map resolution across spot views.
+    shadow_spot_resolution: u32,
     /// Maximum shadow map resolution across cube views.
     shadow_cube_resolution: u32,
 }
@@ -132,9 +138,10 @@ impl ShadowFeature {
             shadow_lights: Vec::with_capacity(16),
             d2_lights: Vec::with_capacity(16),
             cube_lights: Vec::with_capacity(16),
-            total_2d_layers: 0,
             total_cube_layers: 0,
             shadow_2d_resolution: 1,
+            spot_lights: Vec::new(),
+            shadow_spot_resolution: 1,
             shadow_cube_resolution: 1,
         }
     }
@@ -186,36 +193,18 @@ impl ShadowFeature {
     pub fn extract_and_prepare(&mut self, ctx: &mut ExtractContext) {
         self.shadow_lights.clear();
         self.d2_lights.clear();
+        self.spot_lights.clear();
+        self.shadow_spot_resolution = 1;
         self.cube_lights.clear();
-        self.total_2d_layers = 0;
         self.total_cube_layers = 0;
         self.shadow_2d_resolution = 1;
         self.shadow_cube_resolution = 1;
 
-        // Build a set of point light IDs for classification.
-        let point_light_ids: rustc_hash::FxHashSet<u64> = ctx
-            .render_lists
-            .active_views
+        let light_kinds: rustc_hash::FxHashMap<_, _> = ctx
+            .extracted_scene
+            .lights
             .iter()
-            .filter(|v| v.is_shadow())
-            .filter_map(|v| {
-                if let ViewTarget::ShadowLight { light_id, .. } = v.target {
-                    // Find the light kind in extracted scene
-                    ctx.extracted_scene
-                        .lights
-                        .iter()
-                        .find(|l| l.id == light_id)
-                        .and_then(|l| {
-                            if matches!(l.kind, LightKind::Point(_)) {
-                                Some(light_id)
-                            } else {
-                                None
-                            }
-                        })
-                } else {
-                    None
-                }
-            })
+            .map(|light| (light.id, &light.kind))
             .collect();
 
         // Count layers by type
@@ -248,7 +237,8 @@ impl ShadowFeature {
                 continue;
             };
 
-            let is_point = point_light_ids.contains(&light_id);
+            let is_point = matches!(light_kinds.get(&light_id), Some(LightKind::Point(_)));
+            let is_spot = matches!(light_kinds.get(&light_id), Some(LightKind::Spot(_)));
 
             if is_point {
                 self.shadow_cube_resolution = self.shadow_cube_resolution.max(view.viewport_size.0);
@@ -269,6 +259,25 @@ impl ShadowFeature {
                 self.shadow_lights.push(inst);
                 self.cube_lights.push((uniform_index, inst));
                 cube_layer += 1;
+            } else if is_spot {
+                self.shadow_spot_resolution = self.shadow_spot_resolution.max(view.viewport_size.0);
+                let ViewTarget::ShadowLight {
+                    layer_index: view_layer_index,
+                    ..
+                } = view.target
+                else {
+                    unreachable!()
+                };
+                let inst = ShadowLightInstance {
+                    light_id,
+                    view_layer_index,
+                    texture_layer_index: self.spot_lights.len() as u32,
+                    light_buffer_index: view.light_buffer_index,
+                    light_view_projection: view.view_projection,
+                    is_point: false,
+                };
+                self.shadow_lights.push(inst);
+                self.spot_lights.push((uniform_index, inst));
             } else {
                 self.shadow_2d_resolution = self.shadow_2d_resolution.max(view.viewport_size.0);
 
@@ -293,7 +302,6 @@ impl ShadowFeature {
             uniform_index += 1;
         }
 
-        self.total_2d_layers = d2_layer;
         self.total_cube_layers = cube_layer;
 
         // Ensure buffer capacity for all uniform slots
@@ -319,8 +327,8 @@ impl ShadowFeature {
 
     /// Create ephemeral shadow pass nodes and add them to the render graph.
     ///
-    /// Registers up to two transient `Depth32Float` textures:
-    /// - A **2D array** for directional/spot shadow layers.
+    /// Registers up to three transient `Depth32Float` textures:
+    /// - Independent **2D arrays** for directional and spot shadow layers.
     /// - A **cube array** for point light shadow faces.
     ///
     /// Returns [`ShadowOutput`] containing the [`TextureNodeId`]s so that
@@ -329,6 +337,7 @@ impl ShadowFeature {
         let mut output = ShadowOutput {
             shadow_2d: None,
             shadow_cube: None,
+            shadow_spot: None,
         };
 
         if self.shadow_lights.is_empty() {
@@ -341,36 +350,46 @@ impl ShadowFeature {
             .expect("Shadow bind group must be prepared before graph build");
 
         // Collect 2D and cube shadow light slices
-        let has_2d = self.total_2d_layers > 0;
         let has_cube = self.total_cube_layers > 0;
 
-        if has_2d {
+        for (resolution, lights, output_slot, label) in [
+            (
+                self.shadow_2d_resolution,
+                self.d2_lights.as_slice(),
+                &mut output.shadow_2d,
+                "Shadow_Directional_Array",
+            ),
+            (
+                self.shadow_spot_resolution,
+                self.spot_lights.as_slice(),
+                &mut output.shadow_spot,
+                "Shadow_Spot_Array",
+            ),
+        ] {
+            if lights.is_empty() {
+                continue;
+            }
             let desc = TextureDesc::new(
-                self.shadow_2d_resolution,
-                self.shadow_2d_resolution,
-                self.total_2d_layers,
+                resolution,
+                resolution,
+                lights.len() as u32,
                 1,
                 1,
                 wgpu::TextureDimension::D2,
                 wgpu::TextureFormat::Depth32Float,
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             );
-
-            let d2_lights = self.d2_lights.as_slice();
             let stride = self.uniform_stride;
-            let shadow_2d_id = ctx.graph.add_pass("Shadow_2D_Pass", |builder| {
-                let tex_id = builder.create_texture("Shadow_2D_Array", desc);
-
+            *output_slot = Some(ctx.graph.add_pass(label, |builder| {
+                let tex_id = builder.create_texture(label, desc);
                 let node = Shadow2DPassNode {
                     bind_group,
-                    lights: d2_lights,
+                    lights,
                     uniform_stride: stride,
                     texture_id: tex_id,
                 };
                 (node, tex_id)
-            });
-
-            output.shadow_2d = Some(shadow_2d_id);
+            }));
         }
 
         if has_cube {

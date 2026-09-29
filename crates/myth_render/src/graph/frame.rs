@@ -77,6 +77,7 @@ pub struct RenderFrameFeatureConfig {
     pub clustered_shading: ClusteredShadingMode,
     pub render_path: RenderPath,
     pub msaa_samples: u32,
+    pub max_local_shadow_views: u32,
 }
 
 // ============================================================================
@@ -507,7 +508,7 @@ impl RenderFrame {
         let shadow_views = Self::build_shadow_views(
             &self.extracted_scene,
             camera,
-            render_lists.active_views.len(),
+            feature_config.max_local_shadow_views,
         );
 
         // ── 5. Shadow map allocation is deferred to RDG ─────────────────
@@ -593,7 +594,7 @@ impl RenderFrame {
     fn build_shadow_views(
         extracted_scene: &ExtractedScene,
         camera: &RenderCamera,
-        _existing_view_count: usize,
+        max_local_shadow_views: u32,
     ) -> Vec<crate::core::view::RenderView> {
         use myth_scene::light::LightKind;
 
@@ -617,9 +618,13 @@ impl RenderFrame {
         let scene_caster_extent = max_distance.max(50.0);
 
         let mut shadow_views = Vec::with_capacity(16);
+        let mut local_budget = LocalShadowBudget(max_local_shadow_views);
 
         for (light_buffer_index, light) in extracted_scene.lights.iter().enumerate() {
             if !light.cast_shadows {
+                continue;
+            }
+            if !local_budget.admit(&light.kind) {
                 continue;
             }
             let shadow_cfg = light.shadow.clone().unwrap_or_default();
@@ -742,7 +747,8 @@ impl RenderFrame {
                 extracted_scene.directional_light_storage_buffer.write();
             let local_light_count = extracted_scene.local_light_count();
             let mut point_shadow_counter = 0i32;
-            let mut d2_layer_counter = 0u32;
+            let mut directional_layer_counter = 0u32;
+            let mut spot_layer_counter = 0u32;
 
             for (light_buffer_index, light) in extracted_scene.lights.iter().enumerate() {
                 if !light.cast_shadows {
@@ -817,8 +823,13 @@ impl RenderFrame {
                     local_light_storage.get_mut(light_buffer_index)
                 };
 
+                let layer_counter = if light.is_directional() {
+                    &mut directional_layer_counter
+                } else {
+                    &mut spot_layer_counter
+                };
                 if let Some(gpu_light) = storage {
-                    gpu_light.shadow_layer_index = d2_layer_counter.cast_signed();
+                    gpu_light.shadow_layer_index = layer_counter.cast_signed();
                     gpu_light.shadow_matrices.0 = cascade_matrices;
                     gpu_light.cascade_count = view_count;
                     gpu_light.cascade_splits = Vec4::new(
@@ -830,7 +841,7 @@ impl RenderFrame {
                     gpu_light.shadow_bias = shadow_cfg.bias;
                     gpu_light.shadow_normal_bias = shadow_cfg.normal_bias;
                 }
-                d2_layer_counter += view_count;
+                *layer_counter += view_count;
             }
         }
 
@@ -854,4 +865,47 @@ fn tracked_cpu_buffer<T: myth_resources::buffer::GpuData>(
     resource_manager
         .get_gpu_buffer_by_cpu_id(cpu_buffer.id())
         .map(|gpu_buffer| Tracked::with_id(gpu_buffer.buffer.clone(), gpu_buffer.id))
+}
+
+/// Extracted lights are ordered by projected influence with stable ID ties.
+/// Whole point-light cubes are admitted together; unused capacity remains
+/// available to less expensive spotlights later in that order.
+struct LocalShadowBudget(u32);
+
+impl LocalShadowBudget {
+    fn admit(&mut self, kind: &myth_scene::light::LightKind) -> bool {
+        use myth_scene::light::LightKind;
+        let cost = match kind {
+            LightKind::Directional(_) => 0,
+            LightKind::Spot(_) => 1,
+            LightKind::Point(_) => 6,
+        };
+        if cost > self.0 {
+            return false;
+        }
+        self.0 -= cost;
+        true
+    }
+}
+
+#[cfg(test)]
+mod shadow_budget_tests {
+    use super::LocalShadowBudget;
+    use glam::Vec3;
+    use myth_scene::Light;
+
+    #[test]
+    fn local_budget_counts_cube_faces_and_never_spends_sun_cascades() {
+        let point = Light::new_point(Vec3::ONE, 1.0, 10.0);
+        let spot = Light::new_spot(Vec3::ONE, 1.0, 10.0, 0.1, 0.5);
+        let sun = Light::new_directional(Vec3::ONE, 1.0);
+        let mut budget = LocalShadowBudget(7);
+        assert!(budget.admit(&sun.kind));
+        assert!(budget.admit(&point.kind));
+        assert!(!budget.admit(&point.kind));
+        assert!(budget.admit(&spot.kind));
+        assert!(!budget.admit(&spot.kind));
+        assert!(budget.admit(&sun.kind));
+        assert_eq!(budget.0, 0);
+    }
 }

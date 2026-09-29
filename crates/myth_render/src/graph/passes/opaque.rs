@@ -76,6 +76,7 @@ impl OpaqueFeature {
         ssao_tex: Option<TextureNodeId>,
         shadow_tex: Option<TextureNodeId>,
         shadow_cube_tex: Option<TextureNodeId>,
+        shadow_spot_tex: Option<TextureNodeId>,
         // env_map_tex: Option<TextureNodeId>,
         pmrem_tex: Option<TextureNodeId>,
         scene_lighting: ClusteredScreenBindings,
@@ -199,6 +200,9 @@ impl OpaqueFeature {
             if let Some(shadow) = shadow_tex {
                 builder.read_texture(shadow);
             }
+            if let Some(shadow_spot) = shadow_spot_tex {
+                builder.read_texture(shadow_spot);
+            }
             if let Some(shadow_cube) = shadow_cube_tex {
                 builder.read_texture(shadow_cube);
             }
@@ -239,6 +243,7 @@ impl OpaqueFeature {
                 ssao_tex,
                 shadow_tex,
                 shadow_cube_tex,
+                shadow_spot_tex,
                 specular_tex,
                 specular_resolved,
                 material_tex,
@@ -296,6 +301,7 @@ pub struct OpaquePassNode<'a> {
     pub ssao_input: Option<TextureNodeId>,
     pub shadow_input: Option<TextureNodeId>,
     pub shadow_cube_input: Option<TextureNodeId>,
+    pub shadow_spot_input: Option<TextureNodeId>,
     pub scene_lighting: ClusteredScreenBindings,
 
     // ─── Internal Cache ────────────────────────────────────────────
@@ -313,6 +319,7 @@ impl OpaquePassNode<'_> {
         ssao_input: Option<TextureNodeId>,
         shadow_input: Option<TextureNodeId>,
         shadow_cube_input: Option<TextureNodeId>,
+        shadow_spot_input: Option<TextureNodeId>,
         specular_tex: TextureNodeId,
         specular_resolve_target: Option<TextureNodeId>,
         material_tex: TextureNodeId,
@@ -332,6 +339,7 @@ impl OpaquePassNode<'_> {
             ssao_input,
             shadow_input,
             shadow_cube_input,
+            shadow_spot_input,
             scene_lighting,
             screen_bind_group: None,
         }
@@ -346,6 +354,7 @@ impl<'a> PassNode<'a> for OpaquePassNode<'a> {
             self.ssao_input,
             self.shadow_input,
             self.shadow_cube_input,
+            self.shadow_spot_input,
             self.scene_lighting,
         );
         self.screen_bind_group = Some(bg);

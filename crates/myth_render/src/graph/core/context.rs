@@ -757,6 +757,7 @@ pub fn build_screen_bind_group<'a>(
     ssao_input: Option<TextureNodeId>,
     shadow_input: Option<TextureNodeId>,
     shadow_cube_input: Option<TextureNodeId>,
+    shadow_spot_input: Option<TextureNodeId>,
     clustered: ClusteredScreenBindings,
 ) -> &'a wgpu::BindGroup {
     let d2array_key = SubViewKey {
@@ -764,6 +765,10 @@ pub fn build_screen_bind_group<'a>(
         ..Default::default()
     };
     if let Some(id) = shadow_input {
+        ctx.views.get_or_create_sub_view(id, &d2array_key);
+    }
+
+    if let Some(id) = shadow_spot_input {
         ctx.views.get_or_create_sub_view(id, &d2array_key);
     }
 
@@ -791,6 +796,11 @@ pub fn build_screen_bind_group<'a>(
         views
             .get_sub_view(id, &d2array_key)
             .expect("Group 3 D2Array shadow view must exist")
+    });
+    let shadow_spot_view = shadow_spot_input.map_or(&sys.depth_d2array, |id| {
+        views
+            .get_sub_view(id, &d2array_key)
+            .expect("Spot shadow view must exist")
     });
     let shadow_cube_view = shadow_cube_input.map_or(&sys.depth_cube_array, |id| {
         views
@@ -846,6 +856,7 @@ pub fn build_screen_bind_group<'a>(
         .with_resource(ssao_view.id())
         .with_resource(shadow_view.id())
         .with_resource(shadow_cube_view.id())
+        .with_resource(shadow_spot_view.id())
         .with_resource(sys.shadow_compare_sampler.id())
         .with_resource(light_metadata_id)
         .with_resource(light_storage_id)
@@ -879,6 +890,10 @@ pub fn build_screen_bind_group<'a>(
                     wgpu::BindGroupEntry {
                         binding: 4,
                         resource: wgpu::BindingResource::TextureView(shadow_cube_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 15,
+                        resource: wgpu::BindingResource::TextureView(shadow_spot_view),
                     },
                     wgpu::BindGroupEntry {
                         binding: 5,
@@ -973,6 +988,10 @@ pub fn build_screen_bind_group<'a>(
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(shadow_cube_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: wgpu::BindingResource::TextureView(shadow_spot_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,

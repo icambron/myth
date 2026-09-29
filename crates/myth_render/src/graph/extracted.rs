@@ -647,6 +647,9 @@ impl Default for ExtractedScene {
 }
 
 fn light_is_visible_for_camera(light: &ExtractedLight, camera: &RenderCamera) -> bool {
+    if !light.intensity.is_finite() || light.intensity <= 0.0 || light.color.max_element() <= 0.0 {
+        return false;
+    }
     match &light.kind {
         LightKind::Directional(_) => true,
         LightKind::Point(point) => {
@@ -781,6 +784,28 @@ mod tests {
     use myth_scene::light::{DirectionalLight, LightKind, PointLight, SpotLight};
 
     use crate::graph::extracted::ExtractedLight;
+
+    #[test]
+    fn zero_output_lights_are_excluded_before_shadow_extraction() {
+        let camera = myth_scene::Camera::new_perspective(60.0, 1.0, 0.1).extract_render_camera();
+        for mut light in [
+            directional_light(1),
+            point_light(2, Vec3::new(0.0, 0.0, -3.0), 1.0, 10.0),
+            spot_light(3, Vec3::new(0.0, 0.0, -3.0), 1.0, 10.0),
+        ] {
+            light.cast_shadows = true;
+            assert!(super::light_is_visible_for_camera(&light, &camera));
+            for intensity in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+                light.intensity = intensity;
+                assert!(!super::light_is_visible_for_camera(&light, &camera));
+            }
+            light.intensity = 1.0;
+            light.color = Vec3::ZERO;
+            assert!(!super::light_is_visible_for_camera(&light, &camera));
+            light.color = Vec3::X;
+            assert!(super::light_is_visible_for_camera(&light, &camera));
+        }
+    }
 
     #[test]
     fn local_light_falloff_survives_gpu_extraction() {

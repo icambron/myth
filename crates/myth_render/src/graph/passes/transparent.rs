@@ -73,6 +73,7 @@ impl TransparentFeature {
         ssao_tex: Option<TextureNodeId>,
         shadow_tex: Option<TextureNodeId>,
         shadow_cube_tex: Option<TextureNodeId>,
+        shadow_spot_tex: Option<TextureNodeId>,
         scene_lighting: ClusteredScreenBindings,
     ) -> TextureNodeId {
         let fc = ctx.frame_config;
@@ -99,6 +100,9 @@ impl TransparentFeature {
             }
             if let Some(shadow) = shadow_tex {
                 builder.read_texture(shadow);
+            }
+            if let Some(shadow_spot) = shadow_spot_tex {
+                builder.read_texture(shadow_spot);
             }
             if let Some(shadow_cube) = shadow_cube_tex {
                 builder.read_texture(shadow_cube);
@@ -136,6 +140,7 @@ impl TransparentFeature {
                 ssao_tex,
                 shadow_tex,
                 shadow_cube_tex,
+                shadow_spot_tex,
                 scene_lighting,
             );
 
@@ -154,6 +159,7 @@ pub struct TransparentPassNode<'a> {
     ssao_input: Option<TextureNodeId>,
     shadow_input: Option<TextureNodeId>,
     shadow_cube_input: Option<TextureNodeId>,
+    shadow_spot_input: Option<TextureNodeId>,
     scene_lighting: ClusteredScreenBindings,
     screen_bind_group: Option<&'a wgpu::BindGroup>,
 }
@@ -169,6 +175,7 @@ impl TransparentPassNode<'_> {
         ssao_input: Option<TextureNodeId>,
         shadow_input: Option<TextureNodeId>,
         shadow_cube_input: Option<TextureNodeId>,
+        shadow_spot_input: Option<TextureNodeId>,
         scene_lighting: ClusteredScreenBindings,
     ) -> Self {
         Self {
@@ -179,6 +186,7 @@ impl TransparentPassNode<'_> {
             ssao_input,
             shadow_input,
             shadow_cube_input,
+            shadow_spot_input,
             scene_lighting,
             screen_bind_group: None,
         }
@@ -193,6 +201,7 @@ impl<'a> PassNode<'a> for TransparentPassNode<'a> {
             self.ssao_input,
             self.shadow_input,
             self.shadow_cube_input,
+            self.shadow_spot_input,
             self.scene_lighting,
         );
         self.screen_bind_group = Some(bg);

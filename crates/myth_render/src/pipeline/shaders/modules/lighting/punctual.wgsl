@@ -146,9 +146,18 @@ fn evaluate_light_visibility(
 
                 let layer = light.shadow_layer_index + i32(cascade_idx);
                 let matrix = light.shadow_matrices[cascade_idx];
-                shadow = sample_shadow(matrix, layer, shadow_pos, light.shadow_bias);
+                shadow = sample_shadow(t_shadow_map_2d_array, matrix, layer, shadow_pos, light.shadow_bias);
+            } else if (light.light_type == 2u) {
+                shadow = sample_shadow(
+                    t_shadow_map_spot_array,
+                    light.shadow_matrices[0],
+                    light.shadow_layer_index,
+                    shadow_pos,
+                    light.shadow_bias
+                );
             } else {
                 shadow = sample_shadow(
+                    t_shadow_map_2d_array,
                     light.shadow_matrices[0],
                     light.shadow_layer_index,
                     shadow_pos,
