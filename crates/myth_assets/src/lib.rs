@@ -8,6 +8,7 @@
 
 pub mod handle;
 pub mod io;
+mod ktx;
 pub mod loaders;
 pub mod manager;
 pub mod prefab;

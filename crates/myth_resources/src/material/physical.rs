@@ -80,6 +80,10 @@ pub struct PhysicalMaterial {
     #[uniform(default = "Vec2::ONE")]
     pub normal_scale: Vec2,
 
+    /// Reconstruct positive Z from an XY normal texture when set to one.
+    #[uniform]
+    pub normal_reconstruct_z: f32,
+
     /// AO map intensity.
     #[uniform(default = "1.0")]
     pub ao_map_intensity: f32,

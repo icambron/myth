@@ -221,6 +221,9 @@ pub struct RendererInitConfig {
     /// Use with caution on WebGPU targets where feature support varies.
     pub required_features: wgpu::Features,
 
+    /// Requested only when the adapter supports them; callers provide fallbacks.
+    pub optional_features: wgpu::Features,
+
     // /// Required wgpu limits (max buffer sizes, binding counts, etc.).
     // pub required_limits: wgpu::Limits,
     /// Depth buffer texture format.
@@ -237,6 +240,7 @@ impl Default for RendererInitConfig {
             backends: None,
             power_preference: wgpu::PowerPreference::None,
             required_features: wgpu::Features::empty(),
+            optional_features: wgpu::Features::empty(),
             // required_limits: wgpu::Limits::default(),
             depth_format: wgpu::TextureFormat::Depth32Float,
         }

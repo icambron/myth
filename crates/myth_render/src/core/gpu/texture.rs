@@ -101,11 +101,13 @@ impl GpuImage {
         });
 
         let generation_id = generate_gpu_resource_id();
-        let completed_mipmap_generation = Arc::new(AtomicU64::new(if mip_level_count <= 1 {
-            generation_id
-        } else {
-            0
-        }));
+        let completed_mipmap_generation = Arc::new(AtomicU64::new(
+            if mip_level_count <= image.mip_level_count() {
+                generation_id
+            } else {
+                0
+            },
+        ));
         Self {
             id: generate_gpu_resource_id(),
             texture,
@@ -197,8 +199,11 @@ impl GpuImage {
                 self.format,
             );
             self.version = image_version;
-            if self.mip_level_count > 1 {
+            if self.mip_level_count > image.mip_level_count() {
                 self.invalidate_mipmaps();
+            } else {
+                self.completed_mipmap_generation
+                    .store(self.generation_id, Ordering::Release);
             }
         }
     }
@@ -214,27 +219,40 @@ impl GpuImage {
     ) {
         image.with_data(|data| {
             let block_size = src_format.block_copy_size(None).unwrap_or(4);
-            let bytes_per_row = src_width * block_size;
-
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                data,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(bytes_per_row),
-                    rows_per_image: Some(src_height),
-                },
-                wgpu::Extent3d {
-                    width: src_width,
-                    height: src_height,
-                    depth_or_array_layers: src_depth,
-                },
-            );
+            let (block_width, block_height) = src_format.block_dimensions();
+            let mut offset = 0;
+            for level in 0..image.mip_level_count() {
+                let width = (src_width >> level).max(1);
+                let height = (src_height >> level).max(1);
+                let depth = if image.dimension == myth_resources::image::ImageDimension::D3 {
+                    (src_depth >> level).max(1)
+                } else {
+                    src_depth
+                };
+                let rows = height.div_ceil(block_height);
+                let bytes_per_row = width.div_ceil(block_width) * block_size;
+                let length = bytes_per_row as usize * rows as usize * depth as usize;
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture,
+                        mip_level: level,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &data[offset..offset + length],
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bytes_per_row),
+                        rows_per_image: Some(rows),
+                    },
+                    wgpu::Extent3d {
+                        width: width.div_ceil(block_width) * block_width,
+                        height: height.div_ceil(block_height) * block_height,
+                        depth_or_array_layers: depth,
+                    },
+                );
+                offset += length;
+            }
         });
     }
 }
@@ -255,8 +273,15 @@ impl ResourceManager {
         let mut needs_recreate = false;
 
         if let Some(gpu_img) = self.resources.image(image_handle) {
+            // Sampler variants can share an image with a superset allocation.
+            // A changed source payload must not retain uninitialized tail mips
+            // or render-attachment usage from an uncompressed representation.
             if gpu_img.mip_level_count < required_mip_count
                 || !gpu_img.usage.contains(required_usage)
+                || gpu_img.format != resolved_format
+                || (gpu_img.version != image_version
+                    && (gpu_img.mip_level_count != required_mip_count
+                        || gpu_img.usage != required_usage))
             {
                 needs_recreate = true;
             }
@@ -364,15 +389,18 @@ impl ResourceManager {
         let sampler_id = self.get_or_create_sampler(texture_asset.sampler);
 
         let mut usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
-        let generated_mips = if texture_asset.generate_mipmaps {
+        let generate_mipmaps = texture_asset.generate_mipmaps
+            && image_arc.mip_level_count() == 1
+            && image_arc.format.block_dimensions() == (1, 1);
+        let generated_mips = if generate_mipmaps {
             let max_dim = std::cmp::max(image_arc.width, image_arc.height);
             max_dim.ilog2() + 1
         } else {
             1
         };
-        let final_mip_count = std::cmp::max(1, generated_mips);
+        let final_mip_count = image_arc.mip_level_count().max(generated_mips);
 
-        if final_mip_count > 1 {
+        if generate_mipmaps && final_mip_count > 1 {
             usage |= wgpu::TextureUsages::RENDER_ATTACHMENT;
         }
 
@@ -386,7 +414,7 @@ impl ResourceManager {
             usage,
         );
 
-        if texture_asset.generate_mipmaps {
+        if generate_mipmaps {
             let mipmap_request = self
                 .resources
                 .image(image_handle)

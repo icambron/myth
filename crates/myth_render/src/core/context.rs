@@ -126,7 +126,8 @@ impl WgpuContext {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features: init_config.required_features,
+                required_features: init_config.required_features
+                    | (init_config.optional_features & adapter.features()),
                 required_limits: adapter.limits(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 ..Default::default()
@@ -221,7 +222,8 @@ impl WgpuContext {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Headless Device"),
-                required_features: init_config.required_features,
+                required_features: init_config.required_features
+                    | (init_config.optional_features & adapter.features()),
                 required_limits: adapter.limits(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 ..Default::default()
