@@ -22,6 +22,7 @@ struct VertexOutput {
     @location({{ loc.next() }}) curr_unjittered_clip_position: vec4<f32>,
     @location({{ loc.next() }}) prev_clip_position: vec4<f32>,
     $$ endif
+
 };
 
 @vertex
@@ -127,6 +128,20 @@ struct FragmentOutput {
     @location(1) velocity: vec2<f32>,
         $$ endif
     $$ endif
+
+    $$ if OUTPUT_DRAW_ID
+        $$ if HAS_VELOCITY_TARGET is defined
+            $$ if USE_SCREEN_SPACE_FEATURES
+    @location(3) draw_id: vec2<u32>,
+            $$ else
+    @location(2) draw_id: vec2<u32>,
+            $$ endif
+        $$ elif USE_SCREEN_SPACE_FEATURES
+    @location(2) draw_id: vec2<u32>,
+        $$ else
+    @location(1) draw_id: vec2<u32>,
+        $$ endif
+    $$ endif
 };
 
 @fragment
@@ -136,6 +151,9 @@ fn fs_main(varyings: VertexOutput) -> FragmentOutput {
     $$ if HAS_MAP
     let tex_color = textureSample(t_map, s_map, varyings.uv);
     opacity *= tex_color.a;
+        $$ if DIAGNOSTIC_CUTOUT
+    if (tex_color.a < 0.5) { discard; }
+        $$ endif
     $$ endif
 
     $$ if ALPHA_MODE == "MASK" or ALPHA_MODE == "BLEND_MASK"
@@ -159,6 +177,10 @@ fn fs_main(varyings: VertexOutput) -> FragmentOutput {
     let ndc_curr = varyings.curr_unjittered_clip_position.xy / varyings.curr_unjittered_clip_position.w;
     let ndc_prev = varyings.prev_clip_position.xy / varyings.prev_clip_position.w;
     out.velocity = (ndc_curr - ndc_prev) * vec2<f32>(0.5, -0.5);
+    $$ endif
+
+    $$ if OUTPUT_DRAW_ID
+    out.draw_id = vec2<u32>(u_model.draw_id_low, u_model.draw_id_high);
     $$ endif
 
     return out;

@@ -114,7 +114,7 @@ fn gen_default(def: &GpuStructDef, layout: &[LayoutField]) -> TokenStream {
         let fty = &f.ty;
         if f.is_padding {
             // Padding fields are always zeroed
-            quote! { #fname: <#fty as Default>::default(), }
+            quote! { #fname: <#fty as bytemuck::Zeroable>::zeroed(), }
         } else if let Some(expr) = &f.default_expr {
             quote! { #fname: #expr, }
         } else {

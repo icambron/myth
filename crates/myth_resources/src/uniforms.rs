@@ -290,6 +290,9 @@ pub struct DynamicModelUniforms {
     pub normal_matrix: Mat3Uniform,
     pub previous_world_matrix: Mat4,
     pub instance_tint: Vec4,
+    /// Renderer node key for optional diagnostic attachment output.
+    pub draw_id_low: u32,
+    pub draw_id_high: u32,
 }
 
 /// Global render state uniforms updated once per frame.

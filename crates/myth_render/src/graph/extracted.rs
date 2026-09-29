@@ -13,6 +13,7 @@
 use std::collections::HashSet;
 
 use glam::{Mat4, Vec3};
+use slotmap::Key;
 
 use bitflags::{Flags, bitflags};
 
@@ -552,12 +553,15 @@ impl ExtractedScene {
                 };
 
                 let world_matrix_inverse = world_matrix.inverse();
+                let draw_id = node_handle.data().as_ffi();
                 let dynamic_offset =
                     resource_manager.allocate_model_uniform(DynamicModelUniforms {
                         world_matrix,
                         world_matrix_inverse,
                         normal_matrix: Mat3Uniform::from_mat4(world_matrix_inverse.transpose()),
                         previous_world_matrix: prev_world_matrix,
+                        draw_id_low: draw_id as u32,
+                        draw_id_high: (draw_id >> 32) as u32,
                         ..Default::default()
                     });
 

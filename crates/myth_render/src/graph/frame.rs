@@ -162,6 +162,9 @@ pub struct BakedRenderLists<'a> {
     /// Baked Z-prepass draw commands (prepass-specific pipelines).
     pub prepass: Vec<DrawCommand<'a>>,
 
+    /// Capture-only first-surface draws, including transparent geometry.
+    pub diagnostic_prepass: Vec<DrawCommand<'a>>,
+
     /// Per-shadow-view baked draw commands, keyed by
     /// `(light_id, layer_index)`.
     pub shadow_queues: FxHashMap<(u64, u32), Vec<DrawCommand<'a>>>,

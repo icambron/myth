@@ -32,6 +32,7 @@ pub(crate) const NORMAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8
 
 /// Feature ID texture format — Rg8Uint.
 pub(crate) const FEATURE_ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg8Uint;
+pub(crate) const DRAW_ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Uint;
 
 /// Velocity buffer format — Rg16Float (2-component half-precision motion vectors).
 pub(crate) const VELOCITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
@@ -46,6 +47,8 @@ pub struct PrepassOutputs {
     pub scene_normals: Option<TextureNodeId>,
     /// Feature-ID colour attachment (if SSS/SSR require it).
     pub feature_id: Option<TextureNodeId>,
+    /// Render-node key, without application domain identity.
+    pub draw_id: Option<TextureNodeId>,
     /// Screen-space velocity buffer for TAA reprojection (`None` when
     /// TAA is not active).  Format: `Rg16Float`.
     pub velocity_buffer: Option<TextureNodeId>,
@@ -65,10 +68,11 @@ pub struct PrepassFeature {
     needs_normal: bool,
     needs_feature_id: bool,
     needs_velocity: bool,
+    needs_draw_id: bool,
 
     // ─── Internal Cache ────────────────────────────────────────────
-    /// Pipeline cache: (main_pipeline_id, needs_normal, needs_feature_id, needs_velocity) → prepass pipeline.
-    local_cache: FxHashMap<(RenderPipelineId, bool, bool, bool), RenderPipelineId>,
+    /// Pipeline cache keyed by main pipeline and enabled prepass targets.
+    local_cache: FxHashMap<(RenderPipelineId, bool, bool, bool, bool), RenderPipelineId>,
 }
 
 impl Default for PrepassFeature {
@@ -84,6 +88,7 @@ impl PrepassFeature {
             needs_normal: false,
             needs_feature_id: false,
             needs_velocity: false,
+            needs_draw_id: false,
             local_cache: FxHashMap::default(),
         }
     }
@@ -93,7 +98,7 @@ impl PrepassFeature {
     #[must_use]
     pub fn local_cache(
         &self,
-    ) -> &FxHashMap<(RenderPipelineId, bool, bool, bool), RenderPipelineId> {
+    ) -> &FxHashMap<(RenderPipelineId, bool, bool, bool, bool), RenderPipelineId> {
         &self.local_cache
     }
 
@@ -118,23 +123,30 @@ impl PrepassFeature {
         self.needs_velocity
     }
 
-    /// Pre-RDG resource preparation: compile prepass pipelines for every
-    /// unique `pipeline_id` in the opaque command list.
+    #[must_use]
+    pub fn needs_draw_id(&self) -> bool {
+        self.needs_draw_id
+    }
+
+    /// Pre-RDG resource preparation: compile prepass pipelines for scene
+    /// opacity and optional diagnostic first-surface capture.
     pub fn extract_and_prepare(
         &mut self,
         ctx: &mut ExtractContext,
         needs_normal: bool,
         needs_feature_id: bool,
         needs_velocity: bool,
+        needs_draw_id: bool,
     ) {
         self.needs_normal = needs_normal;
         self.needs_feature_id = needs_feature_id;
         self.needs_velocity = needs_velocity;
+        self.needs_draw_id = needs_draw_id;
         self.prepare_pipelines(ctx);
     }
 
-    /// Build prepass pipelines for every unique `pipeline_id` in the opaque
-    /// command list.
+    /// Build scene prepass pipelines, plus transparent surface pipelines when
+    /// a capture needs first-surface geometry.
     fn prepare_pipelines(&mut self, ctx: &mut ExtractContext) {
         let render_state_id = ctx.render_state.id;
         let scene_id = ctx.extracted_scene.scene_id;
@@ -153,12 +165,18 @@ impl PrepassFeature {
         let geo_guard = ctx.assets.geometries.read_lock();
         let mat_guard = ctx.assets.materials.read_lock();
 
-        for cmd in &ctx.render_lists.opaque {
+        for cmd in ctx.render_lists.opaque.iter().chain(
+            ctx.render_lists
+                .transparent
+                .iter()
+                .filter(|_| self.needs_draw_id),
+        ) {
             if self.local_cache.contains_key(&(
                 cmd.pipeline_id,
                 self.needs_normal,
                 self.needs_feature_id,
                 self.needs_velocity,
+                self.needs_draw_id,
             )) {
                 continue;
             }
@@ -170,7 +188,7 @@ impl PrepassFeature {
                 continue;
             };
 
-            if material.is_transparent() {
+            if material.is_transparent() && !self.needs_draw_id {
                 continue;
             }
 
@@ -214,6 +232,12 @@ impl PrepassFeature {
             }
             if self.needs_feature_id {
                 options.add_define("OUTPUT_FEATURE_ID", "1");
+            }
+            if self.needs_draw_id {
+                options.add_define("OUTPUT_DRAW_ID", "1");
+                if material.is_transparent() {
+                    options.add_define("DIAGNOSTIC_CUTOUT", "1");
+                }
             }
 
             // ── Shader generation ──────────────────────────────────────
@@ -296,6 +320,13 @@ impl PrepassFeature {
                     write_mask: wgpu::ColorWrites::ALL,
                 }));
             }
+            if self.needs_draw_id {
+                color_targets.push(ColorTargetKey::from(wgpu::ColorTargetState {
+                    format: DRAW_ID_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                }));
+            }
 
             let prepass_key = SimpleGeometryPipelineKey {
                 shader_hash,
@@ -329,6 +360,7 @@ impl PrepassFeature {
                     self.needs_normal,
                     self.needs_feature_id,
                     self.needs_velocity,
+                    self.needs_draw_id,
                 ),
                 pipeline_id,
             );
@@ -347,6 +379,8 @@ impl PrepassFeature {
         needs_normal: bool,
         needs_feature_id: bool,
         needs_velocity: bool,
+        needs_draw_id: bool,
+        diagnostic: bool,
     ) -> PrepassOutputs {
         let fc = ctx.frame_config;
 
@@ -364,16 +398,34 @@ impl PrepassFeature {
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
         );
-        let scene_depth = ctx.graph.register_texture("Scene_Depth", depth_desc, false);
+        let scene_depth = ctx.graph.register_texture(
+            if diagnostic {
+                "Geometry_Depth"
+            } else {
+                "Scene_Depth"
+            },
+            depth_desc,
+            false,
+        );
 
         let scene_normals = if needs_normal {
             let desc = TextureDesc::new_2d(
                 fc.width,
                 fc.height,
                 NORMAL_FORMAT,
-                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
             );
-            Some(ctx.graph.register_texture("Scene_Normals", desc, false))
+            Some(ctx.graph.register_texture(
+                if diagnostic {
+                    "Geometry_Normals"
+                } else {
+                    "Scene_Normals"
+                },
+                desc,
+                false,
+            ))
         } else {
             None
         };
@@ -385,7 +437,15 @@ impl PrepassFeature {
                 FEATURE_ID_FORMAT,
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             );
-            Some(ctx.graph.register_texture("Feature_ID", desc, false))
+            Some(ctx.graph.register_texture(
+                if diagnostic {
+                    "Geometry_Feature_ID"
+                } else {
+                    "Feature_ID"
+                },
+                desc,
+                false,
+            ))
         } else {
             None
         };
@@ -397,7 +457,35 @@ impl PrepassFeature {
                 VELOCITY_FORMAT,
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             );
-            Some(ctx.graph.register_texture("Velocity_Buffer", desc, false))
+            Some(ctx.graph.register_texture(
+                if diagnostic {
+                    "Geometry_Velocity"
+                } else {
+                    "Velocity_Buffer"
+                },
+                desc,
+                false,
+            ))
+        } else {
+            None
+        };
+
+        let draw_id = if needs_draw_id {
+            let desc = TextureDesc::new_2d(
+                fc.width,
+                fc.height,
+                DRAW_ID_FORMAT,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            );
+            Some(ctx.graph.register_texture(
+                if diagnostic {
+                    "Geometry_Draw_ID"
+                } else {
+                    "Draw_ID"
+                },
+                desc,
+                false,
+            ))
         } else {
             None
         };
@@ -407,29 +495,43 @@ impl PrepassFeature {
             scene_normals: scene_normals.unwrap_or(TextureNodeId::from_index(0)),
             feature_id: feature_id.unwrap_or(TextureNodeId::from_index(0)),
             velocity_buffer: velocity_buffer.unwrap_or(TextureNodeId::from_index(0)),
+            draw_id: draw_id.unwrap_or(TextureNodeId::from_index(0)),
             needs_normal,
             needs_feature_id,
             needs_velocity,
+            needs_draw_id,
+            diagnostic,
         };
-        ctx.graph.add_pass("Pre_Pass", |builder| {
-            builder.write_texture(scene_depth);
-            if let Some(n) = scene_normals {
-                builder.write_texture(n);
-            }
-            if let Some(f) = feature_id {
-                builder.write_texture(f);
-            }
-            if let Some(v) = velocity_buffer {
-                builder.write_texture(v);
-            }
-            (node, ())
-        });
+        ctx.graph.add_pass(
+            if diagnostic {
+                "Geometry_Pre_Pass"
+            } else {
+                "Pre_Pass"
+            },
+            |builder| {
+                builder.write_texture(scene_depth);
+                if let Some(n) = scene_normals {
+                    builder.write_texture(n);
+                }
+                if let Some(f) = feature_id {
+                    builder.write_texture(f);
+                }
+                if let Some(v) = velocity_buffer {
+                    builder.write_texture(v);
+                }
+                if let Some(id) = draw_id {
+                    builder.write_texture(id);
+                }
+                (node, ())
+            },
+        );
 
         PrepassOutputs {
             scene_depth,
             scene_normals,
             feature_id,
             velocity_buffer,
+            draw_id,
         }
     }
 }
@@ -449,11 +551,14 @@ pub struct PrepassPassNode {
     scene_normals: TextureNodeId,
     feature_id: TextureNodeId,
     velocity_buffer: TextureNodeId,
+    draw_id: TextureNodeId,
 
     // ─── Push Parameters ───────────────────────────────────────────
     needs_normal: bool,
     needs_feature_id: bool,
     needs_velocity: bool,
+    needs_draw_id: bool,
+    diagnostic: bool,
 }
 
 impl PassNode<'_> for PrepassPassNode {
@@ -461,8 +566,8 @@ impl PassNode<'_> for PrepassPassNode {
         let gpu_global_bind_group = ctx.baked_lists.global_bind_group;
 
         let mut color_attachments: smallvec::SmallVec<
-            [Option<wgpu::RenderPassColorAttachment>; 3],
-        > = smallvec::SmallVec::with_capacity(3);
+            [Option<wgpu::RenderPassColorAttachment>; 4],
+        > = smallvec::SmallVec::with_capacity(4);
 
         let normal_clear = wgpu::Color {
             r: 0.5,
@@ -497,6 +602,15 @@ impl PassNode<'_> for PrepassPassNode {
         {
             color_attachments.push(Some(att));
         }
+        if self.needs_draw_id
+            && let Some(att) = ctx.get_color_attachment(
+                self.draw_id,
+                RenderTargetOps::Clear(wgpu::Color::TRANSPARENT),
+                None,
+            )
+        {
+            color_attachments.push(Some(att));
+        }
 
         let dtt = ctx.get_depth_stencil_attachment(self.scene_depth, 0.0);
 
@@ -511,6 +625,13 @@ impl PassNode<'_> for PrepassPassNode {
 
         pass.set_bind_group(0, gpu_global_bind_group, &[]);
 
-        submit_draw_commands(&mut pass, &ctx.baked_lists.prepass);
+        submit_draw_commands(
+            &mut pass,
+            if self.diagnostic {
+                &ctx.baked_lists.diagnostic_prepass
+            } else {
+                &ctx.baked_lists.prepass
+            },
+        );
     }
 }
