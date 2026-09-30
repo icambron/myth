@@ -13,6 +13,7 @@
 use std::collections::HashSet;
 
 use glam::{Mat4, Vec3};
+use slotmap::Key;
 
 use bitflags::{Flags, bitflags};
 
@@ -21,7 +22,9 @@ use myth_assets::{AssetServer, GeometryHandle, MaterialHandle};
 use myth_resources::BoundingBox;
 use myth_resources::buffer::CpuBuffer;
 use myth_resources::shader_defines::ShaderDefines;
-use myth_resources::uniforms::{EnvironmentUniforms, GpuLightStorage, LightBufferMetadata};
+use myth_resources::uniforms::{
+    DynamicModelUniforms, EnvironmentUniforms, GpuLightStorage, LightBufferMetadata, Mat3Uniform,
+};
 use myth_scene::background::BackgroundMode;
 use myth_scene::camera::RenderCamera;
 use myth_scene::environment::Environment;
@@ -46,6 +49,8 @@ pub struct ExtractedRenderItem {
     pub prev_world_matrix: Mat4,
 
     pub object_bind_group: BindGroupContext,
+    /// One model-uniform slot shared by the main camera and all shadow views.
+    pub dynamic_offset: u32,
     /// Geometry handle (8 bytes)
     pub geometry: GeometryHandle,
     /// Material handle (8 bytes)
@@ -156,6 +161,7 @@ pub struct ExtractedScene {
 }
 
 struct CollectedMesh {
+    pub dynamic_offset: u32,
     pub node_handle: NodeHandle,
     pub skeleton: Option<SkeletonKey>,
 
@@ -548,7 +554,21 @@ impl ExtractedScene {
                     geometry.bounding_box.transform(&node_world)
                 };
 
+                let world_matrix_inverse = world_matrix.inverse();
+                let draw_id = node_handle.data().as_ffi();
+                let dynamic_offset =
+                    resource_manager.allocate_model_uniform(DynamicModelUniforms {
+                        world_matrix,
+                        world_matrix_inverse,
+                        normal_matrix: Mat3Uniform::from_mat4(world_matrix_inverse.transpose()),
+                        previous_world_matrix: prev_world_matrix,
+                        draw_id_low: draw_id as u32,
+                        draw_id_high: (draw_id >> 32) as u32,
+                        ..Default::default()
+                    });
+
                 self.collected_meshes.push(CollectedMesh {
+                    dynamic_offset,
                     node_handle,
                     skeleton: skeleton_key,
                     world_matrix,
@@ -569,15 +589,16 @@ impl ExtractedScene {
         // Phase 2: Prepare resources & build render items (no lock)
         // =========================================================
 
+        // Finish allocation and buffer growth before creating any object bindings.
+        // Every view uses the same per-mesh world transforms and normal matrix.
+        resource_manager.flush_model_buffers();
+
         // Prepare skeleton data
         for skeleton_key in &self.collected_skeleton_keys {
             if let Some(skeleton) = scene.skeleton_pool.get(*skeleton_key) {
                 resource_manager.prepare_skeleton(skeleton);
             }
         }
-
-        // Ensure model buffer capacity
-        // resource_manager.ensure_model_buffer_capacity(self.collected_meshes.len());
 
         for item in &self.collected_meshes {
             let Some(mesh) = scene.meshes.get_mut(item.node_handle) else {
@@ -606,6 +627,7 @@ impl ExtractedScene {
                 world_matrix: item.world_matrix,
                 prev_world_matrix: item.prev_world_matrix,
                 object_bind_group,
+                dynamic_offset: item.dynamic_offset,
                 geometry: mesh.geometry,
                 material: mesh.material,
                 item_variant_flags: item.item_variant_flags,
@@ -981,5 +1003,113 @@ mod tests {
 
         assert!(radius > spot.range * 0.5);
         assert!(center.z < 0.0);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod model_buffer_tests {
+    use super::*;
+    use myth_resources::geometry::{Attribute, Geometry};
+    use myth_resources::material::{Material, PhongMaterial};
+    use myth_resources::mesh::Mesh;
+    use myth_scene::camera::Camera;
+
+    #[test]
+    #[ignore = "requires a native GPU adapter; run explicitly with --ignored"]
+    fn object_bindings_follow_model_buffer_growth_between_frames() {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(
+                wgpu::InstanceDescriptor::new_without_display_handle_from_env(),
+            );
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .expect("the model-buffer regression requires a GPU adapter");
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    required_limits: adapter.limits(),
+                    ..Default::default()
+                })
+                .await
+                .expect("test GPU device");
+            let mut resources = ResourceManager::new(device.clone(), queue.clone(), 1);
+            let assets = AssetServer::new();
+            let mut geometry = Geometry::new();
+            geometry.set_attribute(
+                "position",
+                Attribute::new_planar(
+                    &[[0.0_f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                    wgpu::VertexFormat::Float32x3,
+                ),
+            );
+            geometry.compute_bounding_volume();
+            let geometry = assets.geometries.add(geometry);
+            let material = assets
+                .materials
+                .add(Material::from(PhongMaterial::new(glam::Vec4::ONE)));
+            let mut scene = Scene::new();
+            let camera = Camera::new_perspective(45.0, 1.0, 0.1).extract_render_camera();
+            let mut extracted = ExtractedScene::new();
+            let depth = device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("Model buffer regression depth"),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Depth32Float,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            // Exercise cached bindings, the initial 4096-slot boundary, and a second resize.
+            for count in [1_usize, 4097, 8193] {
+                while scene.meshes.len() < count {
+                    scene.add_mesh(Mesh::new(geometry, material));
+                }
+                let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+                resources.next_frame();
+                extracted.extract_into(&mut scene, &camera, &assets, &mut resources, 0);
+                assert_eq!(extracted.render_items.len(), count);
+                assert_eq!(resources.model_allocator.len(), count);
+                let stride =
+                    super::super::super::core::gpu::ModelBufferAllocator::uniform_stride().get();
+                for (index, item) in extracted.render_items.iter().enumerate() {
+                    assert_eq!(u64::from(item.dynamic_offset), index as u64 * stride);
+                }
+                let item = extracted.render_items.last().unwrap();
+                let mut encoder =
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Model buffer regression shadow pass"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &depth,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Discard,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        ..Default::default()
+                    });
+                    pass.set_bind_group(
+                        2,
+                        &item.object_bind_group.bind_group,
+                        &[item.dynamic_offset],
+                    );
+                }
+                queue.submit([encoder.finish()]);
+                assert!(
+                    scope.pop().await.is_none(),
+                    "stale model binding at {count} meshes"
+                );
+            }
+        });
     }
 }

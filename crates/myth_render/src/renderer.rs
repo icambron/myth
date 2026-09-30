@@ -90,6 +90,7 @@ pub struct Renderer {
     init_config: RendererInitConfig,
     settings: RendererSettings,
     context: Option<RendererState>,
+    diagnostic_capture: bool,
 }
 
 /// Internal renderer state
@@ -189,7 +190,13 @@ impl Renderer {
             settings,
             context: None,
             size: (0, 0),
+            diagnostic_capture: false,
         }
+    }
+
+    /// Enables depth, normal and render-node ID outputs for a frame capture.
+    pub fn set_diagnostic_capture(&mut self, enabled: bool) {
+        self.diagnostic_capture = enabled;
     }
 
     /// Returns the current surface size in pixels as `(width, height)`.
@@ -491,7 +498,11 @@ impl Renderer {
             #[cfg(not(feature = "debug_view"))]
             let (dbg_needs_normal, dbg_needs_velocity) = (false, false);
 
-            let needs_normal = ssao_enabled || ssgi_enabled || needs_feature_id || dbg_needs_normal;
+            let needs_normal = ssao_enabled
+                || ssgi_enabled
+                || needs_feature_id
+                || dbg_needs_normal
+                || self.diagnostic_capture;
             let needs_velocity =
                 camera.aa_mode.is_taa() || ssgi_enabled || ssr_enabled || dbg_needs_velocity;
 
@@ -619,6 +630,7 @@ impl Renderer {
                     needs_normal,
                     needs_feature_id,
                     needs_velocity,
+                    self.diagnostic_capture,
                 );
 
                 if needs_scene_hiz {

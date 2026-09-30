@@ -32,14 +32,16 @@ use super::frame::{
 /// Passed as `Some(...)` in the HighFidelity render path and `None` when
 /// the prepass is disabled (BasicForward).
 pub struct PrepassBakeConfig<'a> {
-    /// Pipeline remapping table: `(main_pipeline, needs_normal, needs_feature_id, needs_velocity) → prepass_pipeline`.
-    pub local_cache: &'a FxHashMap<(RenderPipelineId, bool, bool, bool), RenderPipelineId>,
+    /// Pipeline remapping table keyed by main pipeline and enabled targets.
+    pub local_cache: &'a FxHashMap<(RenderPipelineId, bool, bool, bool, bool), RenderPipelineId>,
     /// Whether the prepass outputs view-space normals.
     pub needs_normal: bool,
     /// Whether the prepass outputs a feature-ID stencil mask.
     pub needs_feature_id: bool,
     /// Whether the prepass outputs velocity vectors for TAA.
     pub needs_velocity: bool,
+    /// Whether the prepass outputs render-node keys.
+    pub needs_draw_id: bool,
 }
 
 /// Bake all render lists into pre-resolved [`DrawCommand`] lists.
@@ -64,6 +66,21 @@ pub fn bake_render_lists<'a>(
         Vec::new()
     };
 
+    let diagnostic_prepass =
+        if let Some(cfg) = prepass_config.as_ref().filter(|cfg| cfg.needs_draw_id) {
+            let mut commands =
+                bake_prepass_commands(&render_lists.opaque, resource_manager, pipeline_cache, cfg);
+            commands.extend(bake_prepass_commands(
+                &render_lists.transparent,
+                resource_manager,
+                pipeline_cache,
+                cfg,
+            ));
+            commands
+        } else {
+            Vec::new()
+        };
+
     let shadow_queues = bake_shadow_queues(
         &render_lists.shadow_queues,
         resource_manager,
@@ -79,6 +96,7 @@ pub fn bake_render_lists<'a>(
         opaque,
         transparent,
         prepass,
+        diagnostic_prepass,
         shadow_queues,
         global_bind_group,
     }
@@ -133,26 +151,27 @@ fn bake_main_commands<'a>(
     out
 }
 
-/// Bake prepass draw commands from the opaque list with pipeline remapping.
+/// Bake prepass draw commands from a render-command list with pipeline remapping.
 ///
-/// For each opaque command that has a corresponding prepass pipeline in
+/// For each command that has a corresponding prepass pipeline in
 /// `cfg.local_cache`, a [`DrawCommand`] is emitted using the prepass
 /// pipeline.  The `stencil_reference` field is populated when feature-ID
 /// writing is enabled.
 fn bake_prepass_commands<'a>(
-    opaque_commands: &'a [RenderCommand],
+    commands: &'a [RenderCommand],
     rm: &'a ResourceManager,
     pc: &'a PipelineCache,
     cfg: &PrepassBakeConfig<'_>,
 ) -> Vec<DrawCommand<'a>> {
-    let mut out = Vec::with_capacity(opaque_commands.len());
+    let mut out = Vec::with_capacity(commands.len());
 
-    for cmd in opaque_commands {
+    for cmd in commands {
         let Some(&prepass_pipeline_id) = cfg.local_cache.get(&(
             cmd.pipeline_id,
             cfg.needs_normal,
             cfg.needs_feature_id,
             cfg.needs_velocity,
+            cfg.needs_draw_id,
         )) else {
             continue;
         };

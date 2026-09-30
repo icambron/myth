@@ -33,6 +33,16 @@ pub struct GraphBlackboard {
     pub scene_color: Option<TextureNodeId>,
     /// Main depth buffer (reverse-Z, written by scene passes).
     pub scene_depth: Option<TextureNodeId>,
+    /// View-space normals from the scene prepass, when requested.
+    pub scene_normals: Option<TextureNodeId>,
+    /// Renderer-node keys from the scene prepass, when requested.
+    pub scene_draw_ids: Option<TextureNodeId>,
+    /// First-surface depth from a capture-only pass that includes transparent geometry.
+    pub geometry_depth: Option<TextureNodeId>,
+    /// First-surface normals from the capture-only pass.
+    pub geometry_normals: Option<TextureNodeId>,
+    /// Renderer-node keys from the capture-only pass.
+    pub geometry_draw_ids: Option<TextureNodeId>,
     /// Reverse-Z Hi-Z pyramid storing the maximum depth per mip texel.
     pub scene_hiz: Option<TextureNodeId>,
     /// Optional atmosphere transmittance LUT for custom passes that need the
